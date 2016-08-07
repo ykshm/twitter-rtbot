@@ -425,7 +425,7 @@ if __name__ == "__main__":
 	#	自分の情報を取得
 	myID = api.me().id
 	print(str(myID) + " shall be used for this session")
-	arrayLog[0] += str(myID) + "shall be used for this session\n\n"
+	arrayLog[0] += str(myID) + " shall be used for this session\n\n"
 
 	#	フォロー一覧の情報の更新
 	updateFollows(strLocFollows, arrayLog)
