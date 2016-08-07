@@ -420,12 +420,12 @@ if __name__ == "__main__":
 
 
 	#	ログ用の変数作成
-	arrayLog[0] += "\n\n\n*****\n\nLaunched at " + str(datetime.now()) + "\n\n"
+	arrayLog[0] += "\n\n\n*****\n\nLaunched at " + str(datetime.now()) + "\n"
 
 	#	自分の情報を取得
 	myID = api.me().id
-	print(str(myID) + "shall be used for this session")
-	arrayLog[0] = str(myID) + "shall be used for this session\n"
+	print(str(myID) + " shall be used for this session")
+	arrayLog[0] += str(myID) + "shall be used for this session\n\n"
 
 	#	フォロー一覧の情報の更新
 	updateFollows(strLocFollows, arrayLog)
