@@ -235,6 +235,62 @@ def getHomeTL(strLocrecordTL, arrayLog):
 ###	完了 --> 自分のhome timelineを取得する
 
 
+#	設定ファイルに指定された検索キーワードでの検索結果のTweet一覧を取得
+#	入力：検索キーワードのファイル位置
+def searchTweets(strLocSearch, arrayLog):
+
+	print ("Start - get search timelines")
+	strLog = "Start - get search timelines\n\n"
+
+	#	検索キーワードおよび検索済のIDを辞書に読み込む
+	f = open(strLocSearch)
+	queryDict = json.load(f)
+	f.close()
+
+	#	TLを保持する配列を初期化
+	arrayTimelines = []
+
+	#	キーワードによるループ、それぞれのキーワードを最大1900Tweetまで読み込む
+	#	API制限の関係上（15分に180回）、最大のキーワードの個数は5個までである
+	for q in queryDict["query_list"]:
+		print ("Search - " + str(q))
+		strLog += "Search - " + str(q) + "\n"
+		intMaxID = 999999999999999999
+		for i in range(19):
+			try:
+				arrayTimelines.extend(api.search(q, count=100, max_id=intMaxID-1, include_rts=0))
+				intMaxID = arrayTimelines[len(arrayTimelines)-1].id
+				if intMaxID < int(queryDict[q][0]):
+					break
+			except TweepError as e:
+				print (e)
+				strLog += str(e) + "\n"
+				break
+		print ("Search done - total " + str(len(arrayTimelines)) + "tweets hit")
+		strLog += "search done - total " + str(len(arrayTimelines)) + "tweets hit\n"		
+		queryDict[q][0] = arrayTimelines[0].id
+
+	#	保存したタイムラインの中でRTされたものを検出
+	#	RTされたものであった場合、ID、被RT数、被ふぁぼ数を元のものとするように上書きする
+	for d in arrayTimelines:
+		if 'retweeted_status' in d._json:
+			d.id = d.retweeted_status.id
+			d.retweet_count = d.retweeted_status.retweet_count
+			d.favorite_count = d.retweeted_status.favorite_count
+			d.created_at = d.retweeted_status.created_at
+
+	f = open(strLocSearch, 'w')
+	json.dump(queryDict, f, indent = 4)
+	f.close()
+
+	print ("Done - hit = " + str(len(arrayTimelines)) + " tweets")
+	strLog += "Done - hit = " + str(len(arrayTimelines)) + " tweets\n\n"
+
+	#	Return
+	arrayLog[0] += strLog
+	return arrayTimelines
+
+
 #	TLの辞書の配列から画像付きTweetでかつ過去にRTされたことのないものを抽出して以下の辞書を返す
 def extractPicTweet(arrayTimelines, arrayLog):
 
@@ -330,15 +386,21 @@ def reviewTweets(dictIDs, intAPI, dictPassIDs, dictRejectIDs, arrayLog):
 					dictTemp = api.get_status(id)
 					a[0] = dictTemp.retweet_count
 					a[1] = dictTemp.favorite_count
-					#	RT閾値の判定
-					if a[0] > intRTThreshold / intAdjustmentFactor and a[1] > intFavThreshold / intAdjustmentFactor:
-						dictPassIDs["listIDs"].append(id)
-						dictPassIDs[str(id)] = a
-					elif floatNow - a[2] <= intTTLThreshold:
-						dictRejectIDs["listIDs"].append(id)
-						dictRejectIDs[str(id)] = a
+					#	既RTの判定
+					if not dictTemp.retweeted:
+						#	RT閾値の判定
+						if a[0] > intRTThreshold / intAdjustmentFactor and a[1] > intFavThreshold / intAdjustmentFactor:
+							dictPassIDs["listIDs"].append(id)
+							dictPassIDs[str(id)] = a
+						elif floatNow - a[2] <= intTTLThreshold:
+							dictRejectIDs["listIDs"].append(id)
+							dictRejectIDs[str(id)] = a
+						else:
+							intRemovalCounter += 1
 					else:
+						#	既RTの場合
 						intRemovalCounter += 1
+
 				except TweepError as e:
 					print (e)
 					strLog += str(e) + "\n"
@@ -391,6 +453,7 @@ if __name__ == "__main__":
 	strLoctargetTweets = inifile.get("file", "targetTweets")
 	strLocrtedTweets = inifile.get("file", "rtedTweets")
 	strLoclog = inifile.get("file", "log")
+	strLocSearch = inifile.get("file", "search")
 	#	パラメータの設定（APIリミット関連）
 	intGetFollowLimit = int(inifile.get("parameter", "getfollow"))
 	intGetFollowTLLimit = int(inifile.get("parameter", "getfollowTL"))
@@ -436,6 +499,11 @@ if __name__ == "__main__":
 	dictRejectIDs = {}
 	dictRejectIDs["listIDs"] = []
 
+	#	RT済TweetのIDと情報を格納する辞書を読み込む
+	f = open(strLocrtedTweets)
+	dictIDsrted = json.load(f)
+	f.close()
+
 	#	RT対象TweetのIDの辞書の読込/RT判定
 	print ("Start - review RT target tweets")
 	arrayLog[0] += "\nStart - review RT target tweets\n"
@@ -462,6 +530,20 @@ if __name__ == "__main__":
 	dictHomeExtract = extractPicTweet(arrayTimelines, arrayLog)
 	intGetAPILimit -= reviewTweets(dictHomeExtract, -1, dictPassIDs, dictRejectIDs, arrayLog)
 
+	#	検索を行いTweetを取得/画像付きTweetを抽出/RT判定
+	#	inifileでsearchQueryの保存されているファイル位置がemptyに指定されている場合は処理は行わない
+	if not strLocSearch == '':
+		arrayTimelines = searchTweets(strLocSearch, arrayLog)
+		dictSearchExtract = extractPicTweet(arrayTimelines, arrayLog)
+		print (str(len(dictSearchExtract["listIDs"])))
+		#	検索結果のTweetリストにはitem.retweetedで除去しきれていない既RTのTweetが入っているので保存してある既RTリストと比較して除去
+		dictSearchExtract["listIDs"] = [id for id in dictSearchExtract["listIDs"] if not id in dictIDsrted["listIDs"]]
+		print (str(len(dictSearchExtract["listIDs"])))
+		intGetAPILimit -= reviewTweets(dictSearchExtract, -1, dictPassIDs, dictRejectIDs, arrayLog)
+	else:
+		print ("Skip - Search")
+		arrayLog[0] += "Skip - Search\n\n"
+
 	#	RT候補Tweet/画像付TweetのIDを含む配列(dictPassIDs["listIDs"]およびdictRejectIDs["listIDs"])を降順ソート
 	print ("Before sort: " + str(len(dictPassIDs["listIDs"])) + " tweets")
 	dictPassIDs["listIDs"] = list(set(dictPassIDs["listIDs"]))
@@ -472,35 +554,34 @@ if __name__ == "__main__":
 	dictRejectIDs["listIDs"].sort(reverse = True)
 	print ("After sort: " + str(len(dictRejectIDs["listIDs"])) + " tweets, dict = " + str(len(dictRejectIDs)) + " keys")
 
-
-	#	RT済TweetのIDと情報を格納する辞書を読み込む
-	f = open(strLocrtedTweets)
-	dictIDsrted = json.load(f)
-	f.close()
-
 	#	RTの実施
-	#	1時間以内に投稿されたTweetであれば指定されたAPI呼び出し回数の限界までRT
-	#	1時間以内に投稿されたTweetが最低RT回数に満たない場合はシャッフルして古いTweetを最低RT回数までRT
+	#	1日以内に投稿されたTweetであれば指定されたAPI呼び出し回数の限界までRT
+	#	1日以内に投稿されたTweetが最低RT回数に満たない場合はシャッフルして古いTweetを最低RT回数までRT
 	print ("Start - RT process")
 	arrayLog[0] += "\nStart - RT process \n"
 
 	floatNow = datetime.now().timestamp() - 9 * 60 * 60
 	intRTCounter = 0
 
-	for i in range(intRTLimit):
+	#	最大30回までRTを試行する
+	for i in range(30):
+		#	最大RT回数に達した時点で終了
+		if intRTCounter >= intRTLimit:
+			break
 		try:
 			intTempID = dictPassIDs["listIDs"][0]
-			#	対象Tweetが投稿されてから1時間以上経過しているか判定
-			if floatNow - dictPassIDs[str(intTempID)][2] > 3600:
+			#	対象Tweetが投稿されてから1日以上経過しているか判定
+			if floatNow - dictPassIDs[str(intTempID)][2] > 86400:
 				#	RT回数が最低回数を超えているか判定
 				#	超過：ループから抜ける / 非超過：Tweetの配列をシャッフルして保持しているIDを更新
 				if intRTCounter >= intRTminLimit:
+					arrayLog[0] += "Now = " + str(floatNow) + " vs Next Tweet = " + str(dictPassIDs[str(intTempID)][2]) + "\n"
 					break
 				else:
 					random.shuffle(dictPassIDs["listIDs"])
 					intTempID = dictPassIDs["listIDs"][0]
-					print ("Next tweet is over 1hr life")
-					arrayLog[0] += "Next tweet is over 1hr life\n"
+					print ("Next tweet is over 1day life")
+					arrayLog[0] += "Next tweet is over 1day life\n"
 			#	RTの実施とRTしたIDおよび情報の転送、削除
 			api.retweet(intTempID)
 			print ("RT: " + str(intTempID) + ", RT = " + str(dictPassIDs[str(intTempID)][0]) + ", fav = " + str(dictPassIDs[str(intTempID)][1]) + ", created at " + str(datetime.fromtimestamp(dictPassIDs[str(intTempID)][2]).isoformat()))
@@ -514,7 +595,7 @@ if __name__ == "__main__":
 		except TweepError as e:
 			dictPassIDs["listIDs"].remove(intTempID)
 			del dictPassIDs[str(intTempID)]
-			intRTCounter += 1		
+			intRTCounter += 0		
 			print (e)
 			arrayLog[0] += str(e) + "\n"
 			arrayLog[0] += "Removed " + str(intTempID) + "\n"
